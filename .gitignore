@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ClipLens 项目数据目录（数据库、向量库、缩略图）
+.cliplens/
+*.lancedb/
+thumbs/
+
