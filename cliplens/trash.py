@@ -25,31 +25,40 @@ class TrashManager:
         self.project.metadata_db.soft_delete(image_ids, deleted=False)
 
     def purge(self, image_ids: list[int]) -> None:
-        """彻底删除：send2trash + 清理记录/向量/缩略图。"""
+        """彻底删除：send2trash + 清理记录/向量/缩略图。
+
+        双库一致性（见 SAD 5.1）：先移入系统回收站（不可逆的副作用最先做），
+        再清向量、最后删元数据记录，并带异常补偿。
+        """
         md = self.project.metadata_db
         vs = self.project.vector_store
         thumbs = self.project.thumbnail_store
 
+        # 1. 先把文件移入系统回收站（最易失败且不可逆，优先执行）
+        file_map: dict[int, Path] = {}
         for iid in image_ids:
             rec = md.get_image(iid)
             if rec and rec.file_path.exists():
                 self._send_to_trash(rec.file_path)
-                # 清理缩略图
-                for size in (ThumbSize.VIEW_256, ThumbSize.PREVIEW_1024):
-                    p = thumbs.abs_path(rec.file_path, size)
-                    p.unlink(missing_ok=True)
+                file_map[iid] = rec.file_path
 
-        # 先清向量，再删记录（双库一致性，见 SAD 5.1）
-        vs.remove(image_ids)
+        # 2. 清理缩略图
+        for p in file_map.values():
+            for size in (ThumbSize.VIEW_256, ThumbSize.PREVIEW_1024):
+                thumbs.abs_path(p, size).unlink(missing_ok=True)
+
+        # 3. 先清向量，再删记录；异常时记录待补偿任务（SAD 5.1）
+        try:
+            vs.remove(image_ids)
+        except Exception:
+            md.set_config("pending_cleanup", ",".join(map(str, image_ids)))
+            raise
         md.purge(image_ids)
 
     def empty(self) -> None:
-        """清空回收站。"""
-        conn = self.project.metadata_db
-        rows = conn._conn.execute(
-            "SELECT id FROM images WHERE is_deleted = 1"
-        ).fetchall()
-        ids = [r["id"] for r in rows]
+        """清空回收站（通过公共查询获取软删除记录，再走 purge 流程）。"""
+        md = self.project.metadata_db
+        ids = md.get_soft_deleted_ids()
         if ids:
             self.purge(ids)
 

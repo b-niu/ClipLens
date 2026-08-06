@@ -32,6 +32,9 @@ class SearchEngine:
         # 3. SQLite 组合过滤 + 批量预取展示字段
         candidate_ids = [iid for iid, _ in oversampled]
         display = md.fetch_display_fields(candidate_ids)
+        # 一次性批量获取所有候选图片的标签，避免 N+1
+        all_tags = md.batch_get_tags(candidate_ids)
+
         items: list[SearchResultItem] = []
         for iid, score in oversampled:
             rec = display.get(iid)
@@ -40,6 +43,12 @@ class SearchEngine:
             if rec["is_deleted"]:
                 continue
             if rec["rating"] < query.min_rating:
+                continue
+            if not _in_date_range(rec["created_at"], query.date_from, query.date_to):
+                continue
+            # 标签过滤（全部命中）
+            item_tags = all_tags.get(iid, [])
+            if query.tags and not set(query.tags).issubset(set(item_tags)):
                 continue
             file_path = Path(rec["file_path"])
             items.append(
@@ -53,7 +62,7 @@ class SearchEngine:
                     is_deleted=bool(rec["is_deleted"]),
                     width=rec["width"],
                     height=rec["height"],
-                    tags=md.get_tags(iid),
+                    tags=item_tags,
                     thumbnail_path=thumbs.abs_path(file_path, ThumbSize.VIEW_256),
                     preview_path=thumbs.abs_path(file_path, ThumbSize.PREVIEW_1024),
                 )
@@ -61,6 +70,24 @@ class SearchEngine:
             if len(items) >= query.top_n:
                 break
         return items
+
+
+def _in_date_range(
+    created_at: object,
+    date_from: object,
+    date_to: object,
+) -> bool:
+    """根据 images.created_at（ISO 字符串或 None）做日期范围过滤。"""
+    if date_from is None and date_to is None:
+        return True
+    if not created_at:
+        return False  # 无法确定创建时间则不过滤通过（需要范围时）
+    ts = str(created_at)[:10]  # YYYY-MM-DD
+    if date_from is not None and ts < str(date_from)[:10]:
+        return False
+    if date_to is not None and ts > str(date_to)[:10]:
+        return False
+    return True
 
 
 def _query_vector(text: str) -> list[float]:

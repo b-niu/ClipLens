@@ -143,10 +143,8 @@ class Scanner:
             )
 
     def _load_all_paths(self) -> dict[str, tuple[int, float]]:
-        conn = self.project.metadata_db
-        # 简化：复用私有连接
-        cur = conn._conn.execute("SELECT file_path, file_size, mtime FROM images")
-        return {r["file_path"]: (r["file_size"], r["mtime"]) for r in cur.fetchall()}
+        # 使用 MetadataDB 公共方法，避免访问私有属性 _conn
+        return self.project.metadata_db.list_all_files()
 
     @staticmethod
     def _md5(path: Path) -> str:

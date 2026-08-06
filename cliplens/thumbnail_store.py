@@ -9,6 +9,10 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # 仅类型检查时导入，避免运行期强制依赖 Pillow
+    from PIL import Image
 
 from .models import ThumbSize
 
@@ -42,14 +46,16 @@ class ThumbnailStore:
         dest = self.abs_path(src, size)
         if dest.exists():
             return dest
-        from PIL import Image  # 延迟导入，核心逻辑不强制依赖 Pillow
+        # 延迟导入 Pillow，核心逻辑不强制依赖
+        from PIL import Image, ImageOps
 
         dest.parent.mkdir(parents=True, exist_ok=True)
         with Image.open(src) as im:
-            im = ImageOps_exif(im)
+            im = _exif_transpose(im)
+            # 等比缩放至目标尺寸内
             im.thumbnail(size.value, Image.Resampling.LANCZOS)
-            # 居中裁剪为正方形
-            im = _center_crop(im, size.value)
+            # 使用 ImageOps.pad 填充到固定正方形，保证输出尺寸一致
+            im = ImageOps.pad(im, size.value, color=(0, 0, 0), centering=(0.5, 0.5))
             im.save(dest, "WEBP", quality=85)
         self._enforce_capacity()
         return dest
@@ -57,13 +63,11 @@ class ThumbnailStore:
     # ---------- 容量控制 ----------
     def _enforce_capacity(self) -> None:
         """超出容量上限时，按最久未使用淘汰（基于 mtime）。"""
-        total = sum(f.stat().st_size for f in self.thumbs_dir.rglob("*.webp"))
+        files = list(self.thumbs_dir.rglob("*.webp"))
+        total = sum(f.stat().st_size for f in files)
         if total <= self.max_bytes:
             return
-        files = sorted(
-            self.thumbs_dir.rglob("*.webp"),
-            key=lambda f: f.stat().st_mtime,
-        )
+        files.sort(key=lambda f: f.stat().st_mtime)
         for f in files:
             if total <= self.max_bytes:
                 break
@@ -71,24 +75,8 @@ class ThumbnailStore:
             f.unlink(missing_ok=True)
 
 
-def ImageOps_exif(im: Image.Image) -> Image.Image:
-    """修正 EXIF 旋转方向（简版，未引入 ImageOps 额外依赖）。"""
-    exif = im.getexif()
-    orientation = exif.get(0x0112, 1)
-    ops = {
-        3: Image.ROTATE_180,
-        6: Image.ROTATE_270,
-        8: Image.ROTATE_90,
-    }
-    if orientation in ops:
-        im = im.transpose(ops[orientation])
-    return im
+def _exif_transpose(im: "Image.Image") -> "Image.Image":
+    """修正 EXIF 旋转方向（使用 Pillow 内置 ImageOps.exif_transpose 更可靠）。"""
+    from PIL import ImageOps
 
-
-def _center_crop(im: Image.Image, size: tuple[int, int]) -> Image.Image:
-    """居中裁剪为指定正方形尺寸。"""
-    target = max(size)
-    w, h = im.size
-    left = (w - target) // 2
-    top = (h - target) // 2
-    return im.crop((max(left, 0), max(top, 0), left + target, top + target))
+    return ImageOps.exif_transpose(im)

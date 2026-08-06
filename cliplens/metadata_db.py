@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -67,6 +68,8 @@ class MetadataDB:
         self.db_path = Path(db_path)
         self.schema_version = schema_version
         self._conn: sqlite3.Connection | None = None
+        # 可重入锁：保护同一连接跨线程读写，避免并发写冲突（SAD 并发规范）
+        self._lock = threading.RLock()
 
     # ---------- 生命周期 ----------
     def open(self) -> "MetadataDB":
@@ -74,27 +77,30 @@ class MetadataDB:
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
+        self._conn.execute("PRAGMA journal_mode = WAL")
         self._conn.executescript(_CREATE_TABLES)
         self.set_config("schema_version", str(self.schema_version))
         return self
 
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     @contextmanager
     def transaction(self):
-        """事务上下文，用于批量写操作保证原子性。"""
+        """事务上下文，用于批量写操作保证原子性。线程安全（RLock）。"""
         if self._conn is None:
             raise RuntimeError("MetadataDB 未打开")
-        try:
-            self._conn.execute("BEGIN")
-            yield self._conn
-            self._conn.commit()
-        except Exception:
-            self._conn.rollback()
-            raise
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                yield self._conn
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     # ---------- 配置 ----------
     def get_config(self, key: str, default: str | None = None) -> str | None:
@@ -137,7 +143,14 @@ class MetadataDB:
                     rec.rating, rec.status.value, int(rec.is_deleted),
                 ),
             )
-            image_id = cur.lastrowid or self._get_id_by_path(rec.file_path)
+            # 事务内用同一连接查询（CONFLICT 时 lastrowid 可能为 0）
+            image_id = cur.lastrowid
+            if not image_id:
+                row = conn.execute(
+                    "SELECT id FROM images WHERE file_path = ?",
+                    (str(rec.file_path),),
+                ).fetchone()
+                image_id = row["id"] if row else -1
         return image_id
 
     def get_image(self, image_id: int) -> ImageRecord | None:
@@ -218,6 +231,24 @@ class MetadataDB:
         ).fetchall()
         return [r["name"] for r in rows]
 
+    def batch_get_tags(self, image_ids: list[int]) -> dict[int, list[str]]:
+        """批量获取多个图片的标签，避免 N+1 查询。"""
+        if not image_ids:
+            return {}
+        placeholders = ",".join("?" for _ in image_ids)
+        rows = self._conn.execute(
+            f"""
+            SELECT it.image_id, t.name FROM tags t
+            JOIN image_tags it ON it.tag_id = t.id
+            WHERE it.image_id IN ({placeholders})
+            """,
+            image_ids,
+        ).fetchall()
+        result: dict[int, list[str]] = {iid: [] for iid in image_ids}
+        for r in rows:
+            result[r["image_id"]].append(r["name"])
+        return result
+
     # ---------- 检索辅助 ----------
     def fetch_display_fields(self, image_ids: list[int]) -> dict[int, dict]:
         """批量预取展示字段，避免 N+1 查询（见 API 文档第 3 节）。"""
@@ -229,11 +260,21 @@ class MetadataDB:
         ).fetchall()
         return {r["id"]: dict(r) for r in rows}
 
-    def _get_id_by_path(self, path: Path) -> int:
-        row = self._conn.execute(
-            "SELECT id FROM images WHERE file_path = ?", (str(path),)
-        ).fetchone()
-        return row["id"] if row else -1
+    def list_all_files(self) -> dict[str, tuple[int, float]]:
+        """返回 {file_path: (file_size, mtime)}，供增量扫描比对（公共方法）。"""
+        rows = self._conn.execute(
+            "SELECT file_path, file_size, mtime FROM images"
+        ).fetchall()
+        return {
+            r["file_path"]: (r["file_size"], r["mtime"]) for r in rows
+        }
+
+    def get_soft_deleted_ids(self) -> list[int]:
+        """返回所有软删除图片的 id（回收站视图/清空用）。"""
+        rows = self._conn.execute(
+            "SELECT id FROM images WHERE is_deleted = 1"
+        ).fetchall()
+        return [r["id"] for r in rows]
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> ImageRecord:

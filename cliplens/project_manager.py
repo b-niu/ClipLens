@@ -61,11 +61,14 @@ class ProjectManager:
             default_app_dir() / "app.db"
         )
         self.app_db_path.parent.mkdir(parents=True, exist_ok=True)
+        # 维护持久连接，避免每个方法都重新建连（设计问题 4）
+        self._app_conn = sqlite3.connect(str(self.app_db_path))
+        self._app_conn.row_factory = sqlite3.Row
         self._init_app_db()
         self._current: ProjectHandle | None = None
 
     def _init_app_db(self) -> None:
-        conn = sqlite3.connect(str(self.app_db_path))
+        conn = self._app_conn
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS projects (
@@ -85,7 +88,15 @@ class ProjectManager:
             "INSERT OR IGNORE INTO system_config(key, value) VALUES('app_schema_version', '1')"
         )
         conn.commit()
-        conn.close()
+
+    def close(self) -> None:
+        """关闭全局连接与当前项目。"""
+        if self._current:
+            self._current.close()
+            self._current = None
+        if self._app_conn is not None:
+            self._app_conn.close()
+            self._app_conn = None
 
     # ---------- 生命周期 ----------
     def create_project(self, name: str, data_dir: Path) -> ProjectHandle:
@@ -103,47 +114,42 @@ class ProjectManager:
             encoding="utf-8",
         )
 
-        conn = sqlite3.connect(str(self.app_db_path))
+        conn = self._app_conn
         cur = conn.execute(
             "INSERT INTO projects(name, data_dir, created_at) VALUES(?, ?, ?)",
             (name, str(data_dir), datetime.now().isoformat()),
         )
         project_id = cur.lastrowid
         conn.commit()
-        conn.close()
 
         info = ProjectInfo(id=project_id, name=name, data_dir=data_dir)
         return self._mount(info)
 
     def open_project(self, project_id: int) -> ProjectHandle:
-        conn = sqlite3.connect(str(self.app_db_path))
+        conn = self._app_conn
         row = conn.execute(
             "SELECT * FROM projects WHERE id = ?", (project_id,)
         ).fetchone()
         if not row:
-            conn.close()
             raise ValueError(f"项目不存在: {project_id}")
         info = ProjectInfo(
-            id=row[0], name=row[1], data_dir=Path(row[2]),
-            created_at=row[3], last_opened_at=row[4],
+            id=row["id"], name=row["name"], data_dir=Path(row["data_dir"]),
+            created_at=row["created_at"], last_opened_at=row["last_opened_at"],
         )
         conn.execute(
             "UPDATE projects SET last_opened_at = ? WHERE id = ?",
             (datetime.now().isoformat(), project_id),
         )
         conn.commit()
-        conn.close()
         return self._mount(info)
 
     def list_projects(self) -> list[ProjectInfo]:
-        conn = sqlite3.connect(str(self.app_db_path))
-        rows = conn.execute(
+        rows = self._app_conn.execute(
             "SELECT * FROM projects ORDER BY last_opened_at DESC"
         ).fetchall()
-        conn.close()
         return [
-            ProjectInfo(id=r[0], name=r[1], data_dir=Path(r[2]),
-                        created_at=r[3], last_opened_at=r[4])
+            ProjectInfo(id=r["id"], name=r["name"], data_dir=Path(r["data_dir"]),
+                        created_at=r["created_at"], last_opened_at=r["last_opened_at"])
             for r in rows
         ]
 
@@ -156,15 +162,14 @@ class ProjectManager:
         if self._current and self._current.info.id == project_id:
             self._current.close()
             self._current = None
-        conn = sqlite3.connect(str(self.app_db_path))
+        conn = self._app_conn
         row = conn.execute(
             "SELECT data_dir FROM projects WHERE id = ?", (project_id,)
         ).fetchone()
         conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         conn.commit()
-        conn.close()
         if row:
-            cliplens_dir = Path(row[0]) / self.CLIPLENS_DIRNAME
+            cliplens_dir = Path(row["data_dir"]) / self.CLIPLENS_DIRNAME
             if cliplens_dir.exists():
                 import shutil
 

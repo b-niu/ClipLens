@@ -78,8 +78,10 @@ class LanceVectorStore(VectorStore):
         self._uri = Path(uri)
         self._uri.parent.mkdir(parents=True, exist_ok=True)
         self._db = lancedb.connect(str(self._uri))
-        self._table = self._db.open_table("vectors")
-        if self._table is None:
+        try:
+            self._table = self._db.open_table("vectors")
+        except Exception:
+            # 表不存在时 open_table 抛异常，需捕获后创建
             self._table = self._db.create_table(
                 "vectors", data=[{"image_id": -1, "vector": [0.0] * 512}]
             )
