@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Local AI-powered image browser and manager based on Chinese-CLIP"
 readme = "README.md"
 requires-python = ">=3.10"
+package = false
+
 dependencies = [
     "pyside6>=6.6",
     "pillow>=10.0",
@@ -11,16 +13,11 @@ dependencies = [
     "send2trash>=1.8",
     "onnxruntime>=1.16",
     "psutil>=5.9",
-    "cn-clip",
-    "torch>=2.0.0",
-    "torchvision>=0.15",
+    "setuptools",
 ]
-
-# cn-clip 非 PyPI 标准包，须从官方 GitHub 安装
-[tool.uv.sources]
-cn-clip = { git = "https://github.com/OFA-Sys/Chinese-CLIP.git" }
 
 [[tool.uv.index]]
 name = "tuna"
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true
+

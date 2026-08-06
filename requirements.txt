@@ -1,27 +1,29 @@
-# ClipLens 运行时依赖
+# ClipLens 核心运行时依赖
 # GUI
 PySide6>=6.6
 
 # 图像处理
 Pillow>=10.0
 
-# AI 推理（Chinese-CLIP 通过 GitHub 安装，见下方注释）
-torch>=2.0
-torchvision>=0.15
-onnxruntime>=1.16
-
-# 数据库
+# 向量数据库
 lancedb>=0.4
 
 # 文件安全（系统回收站）
 send2trash>=1.8
 
+# 可选 CPU 推理（未安装 cn-clip 时，LanceDB 用内置距离计算）
+onnxruntime>=1.16
+
 # 系统监控（内存占用显示）
 psutil>=5.9
 
-# ---- Chinese-CLIP 多模态模型 ----
-# 非标准 PyPI 包，需从官方仓库安装：
-#   pip install cn_clip
-# 或
+# ---------------------------------------------------------------
+# 可选：AI 语义检索（Chinese-CLIP）—— 非核心，仅在需要真实语义检索时安装
+# torch>=2.0
+# torchvision>=0.15
+# cn-clip 为非标准 PyPI 包，需从官方 GitHub 安装：
 #   pip install "cn_clip @ git+https://github.com/OFA-Sys/Chinese-CLIP.git"
-# 注：cn_clip 依赖 torch / torchvision，且需与其 CUDA 版本匹配。
+# 注意：cn-clip 的依赖 lmdb 在 Windows 上从源码构建可能失败（需要 patch-ng），
+# 且该依赖仅用于 cn-clip 的评测代码。若构建失败可跳过 cn-clip，
+# ClipLens 核心功能（浏览/扫描/检索框架/回收站）仍完整可用。
+# ---------------------------------------------------------------

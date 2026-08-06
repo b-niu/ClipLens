@@ -43,15 +43,20 @@ ClipLens/
 ## 快速开始
 
 ```bash
+# 使用 uv（推荐）
+uv sync                          # 安装核心依赖
+uv sync --extra ai               # 可选：安装 AI 语义检索（cn-clip）
+
+# 或 pip
 pip install -r requirements.txt
 
-# CLI 原型（无需 GUI）
-python -m cliplens.cli new demo --dir ./my_project
-python -m cliplens.cli scan --project 1 --root ./my_images
-python -m cliplens.cli search --project 1 "风景 海边"
+# CLI 原型
+python main.py --cli new demo --dir ./my_project
+python main.py --cli scan --project 1 --root ./my_images
+python main.py --cli search --project 1 "风景 海边"
 ```
 
-> 注意：`cli.py` 核心逻辑仅依赖标准库（SQLite）。缩略图生成依赖 Pillow，向量库默认使用内存实现，生产环境替换为 LanceDB + Chinese-CLIP。
+> 依赖说明：核心依赖轻量（PySide6/Pillow/LanceDB/send2trash）。cn-clip/torch 为**可选** `ai` extra——因 cn-clip 依赖的 `lmdb` 在 Windows 上源码构建可能失败，且该依赖仅用于 cn-clip 的评测代码。未安装 cn-clip 时语义检索返回基于占位向量的结果，其余功能完整可用。
 
 ## 文档索引
 
